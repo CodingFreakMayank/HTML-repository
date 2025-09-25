@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Seating Plan Maker</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    :root{
+      --pool-w: 33vw;
+      --layout-w: calc(100vw - var(--pool-w));
+      --tile-h: 56px;
+      --gap: 10px;
+    }
+    html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,Arial;color:#111;background:#f6f7fb;}
+    .app{display:flex;height:100vh;overflow:hidden;}
+    .pool {
+      width:var(--pool-w);
+      min-width:300px;
+      background:linear-gradient(#fff,#fbfdff);
+      border-right:1px solid #e3e7ef;
+      padding:12px;
+      box-sizing:border-box;
+      display:flex;
+      flex-direction:column;
+    }
+    .pool-header{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+    .pool-header input[type=file]{display:none;}
+    .btn {
+      background:#2b6ef6;color:#fff;padding:8px 10px;border-radius:8px;border:0;cursor:pointer;font-weight:600;
+    }
+    .btn.ghost{background:transparent;color:#2b6ef6;border:1px solid #cfe0ff;}
+    .small{font-size:13px;padding:6px 8px}
+    .pool-stats{font-size:13px;color:#556;margin-top:6px}
+    .pool-body{
+      margin-top:10px;flex:1;overflow:auto;padding-right:6px;position:relative;
+    }
+    .pool-body.sticky{position:sticky;top:0}
+    .pool-grid{
+      display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;
+      align-items:start;
+    }
+    .student-tile{
+      user-select:none;
+      padding:8px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,0.06);
+      display:flex;flex-direction:column;gap:4px;cursor:grab;
+      min-height:var(--tile-h);justify-content:center;
+    }
+    .tile-top{font-weight:700;font-size:14px}
+    .tile-bottom{font-size:12px;color:#222a44cc}
+    .layout-area{flex:1;display:flex;flex-direction:column;overflow:auto;padding:12px;box-sizing:border-box;}
+    .rooms-top{display:flex;align-items:center;gap:8px;margin-bottom:12px;overflow:auto;padding-bottom:6px}
+    .room-tab{padding:8px 12px;border-radius:8px;background:#fff;border:1px solid #e3e7ef;cursor:pointer;white-space:nowrap}
+    .room-tab.active{background:#2b6ef6;color:#fff;box-shadow:0 6px 18px rgba(43,110,246,0.12)}
+    .room-panel{display:flex;gap:12px;align-items:center;background:#fff;padding:12px;border-radius:10px;border:1px solid #e9eef8;margin-bottom:12px}
+    .room-info{font-size:14px}
+    .count-list{display:flex;gap:8px;flex-wrap:wrap}
+    .controls-row{display:flex;gap:8px;align-items:center}
+    .num-input{width:68px;padding:6px;border-radius:8px;border:1px solid #dbe7ff}
+    .mini{font-size:12px;padding:6px 8px}
+    .footer-actions{display:flex;gap:8px;margin-top:12px;align-items:center}
+    .grid-wrap{background:#fff;padding:16px;border-radius:10px;border:1px solid #e9eef8;flex:1;overflow:auto}
+    .grid{display:grid;gap:6px}
+    .cell{
+      min-height:60px;border-radius:8px;border:1px dashed #d7def0;background:linear-gradient(#fbfcff,#fff);
+      display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden;
+    }
+    .placed-tile{padding:6px;border-radius:6px;text-align:center;cursor:grab;user-select:none}
+    .badge{background:#eef4ff;padding:6px 8px;border-radius:8px;font-weight:600}
+    @media (max-width:900px){
+      :root{--pool-w:40vw}
+      .pool-grid { grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="pool" aria-label="student-pool">
+      <div class="pool-header">
+        <label class="btn small" title="Upload Excel"><input id="file-input" type="file" accept=".xlsx,.xls" /> Upload Excel</label>
+        <button id="clear-data" class="btn ghost small">Clear</button>
+        <button id="add-room" class="btn small" style="margin-left:4px">+ Room</button>
+      </div>
+      <div class="pool-stats" id="pool-stats">Pool: 0 students</div>
+      <div class="pool-body sticky" id="pool-body">
+        <div id="pool-grid" class="pool-grid"></div>
+      </div>
+      <div style="margin-top:10px;font-size:13px;color:#445">Drag a tile from the pool into any cell. Double-click a placed tile to return it to pool.</div>
+    </div>
+
+    <div class="layout-area">
+      <div class="rooms-top" id="rooms-top"></div>
+      <div id="room-panel" class="room-panel" style="display:none">
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          <div style="display:flex;align-items:center;gap:8px">
+            <input id="room-name" class="num-input" style="font-weight:700" />
+            <button id="rename-room" class="btn small">Rename</button>
+          </div>
+          <div class="room-info" id="room-info">Total placed: 0</div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-left:auto">
+          <div class="controls-row">
+            <label>Rows <input id="rows-input" class="num-input" type="number" min="1" value="6" /></label>
+            <label>Cols <input id="cols-input" class="num-input" type="number" min="1" value="6" /></label>
+            <button id="apply-dim" class="btn small">Apply</button>
+            <button id="clear-room" class="btn ghost small">Clear Room</button>
+            <button id="delete-room" class="btn ghost small">Delete Room</button>
+          </div>
+          <div class="count-list" id="class-counts"></div>
+        </div>
+      </div>
+
+      <div class="grid-wrap">
+        <div id="layout-area" style="min-height:420px">
+          <div id="grid-container"></div>
+        </div>
+      </div>
+
+      <div class="footer-actions" style="margin-top:10px">
+        <button id="export-png" class="btn">Export PNG</button>
+        <button id="export-pdf" class="btn">Export PDF</button>
+        <button id="export-doc" class="btn">Export Word</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const state = {
+  students: [],
+  pool: [],
+  classColor: {},
+  rooms: [],
+  activeRoom: 0
+};
+const el = id => document.getElementById(id);
+const randId = () => 's' + Date.now() + Math.random().toString(36).slice(2,8);
+function colorForClass(name) {
+  if (state.classColor[name]) return state.classColor[name];
+  const used = Object.keys(state.classColor).length;
+  const hue = (used * 57) % 360;
+  const col = `hsl(${hue} 70% 80%)`;
+  state.classColor[name] = col;
+  return col;
+}
+
+// Excel parsing
+el('file-input').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const data = await f.arrayBuffer();
+  const wb = XLSX.read(data);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const json = XLSX.utils.sheet_to_json(ws, { defval: '' });
+  if (!json.length) { alert('No rows found in sheet'); return; }
+  const parsed = json.map((row) => {
+    const keys = Object.keys(row);
+    const lookup = (names) => {
+      for (const key of keys) {
+        const k = key.toLowerCase().replace(/\s+/g,'');
+        if (names.includes(k)) return row[key];
+      }
+      return '';
+    };
+    const roll = lookup(['rollno','roll','rollnumber']) || row[keys[0]] || '';
+    const name = lookup(['studentname','name','student']) || row[keys[1]] || '';
+    const className = lookup(['classname','class','std']) || row[keys[2]] || 'Unknown';
+    const sec = lookup(['sec','section','secname']) || row[keys[3]] || '';
+    return { id: randId(), roll: String(roll).trim(), name: String(name).trim(), className: String(className).trim(), sec: String(sec).trim() };
+  });
+  state.students = state.students.concat(parsed);
+  state.pool = state.pool.concat(parsed.map(s => s.id));
+  parsed.forEach(s => colorForClass(s.className));
+  renderPool();
+  renderRoomsTop();
+});
+
+el('clear-data').addEventListener('click', () => {
+  if (!confirm('Clear all students and rooms?')) return;
+  state.students = []; state.pool = []; state.classColor = {}; state.rooms = []; state.activeRoom = 0;
+  initDefaultRoom(); renderAll();
+});
+
+function makeGrid(rows, cols) { return new Array(rows*cols).fill(0).map(()=>({studentId:null})); }
+function initDefaultRoom(){ if(!state.rooms.length){ state.rooms.push({id:'r'+Date.now(),name:'Room 1',rows:6,cols:6,grid:makeGrid(6,6)}); } }
+initDefaultRoom();
+
+el('add-room').addEventListener('click', () => {
+  const idx = state.rooms.length+1;
+  state.rooms.push({id:'r'+Date.now(),name:`Room ${idx}`,rows:6,cols:6,grid:makeGrid(6,6)});
+  state.activeRoom = state.rooms.length-1; renderAll();
+});
+
+function renderRoomsTop(){
+  const top = el('rooms-top'); top.innerHTML='';
+  state.rooms.forEach((r,i)=>{
+    const btn=document.createElement('div'); btn.className='room-tab'+(i===state.activeRoom?' active':'');
+    btn.textContent=r.name; btn.onclick=()=>{state.activeRoom=i;renderAll();}; top.appendChild(btn);
+  });
+}
+
+function renderPool(){
+  const container = el('pool-grid'); container.innerHTML='';
+  const poolStudents = state.pool.map(id=>state.students.find(s=>s.id===id)).filter(Boolean);
+  el('pool-stats').textContent=`Pool: ${poolStudents.length} students`;
+  poolStudents.forEach(s=>{
+    const div=document.createElement('div'); div.className='student-tile'; div.draggable=true;
+    div.style.background=colorForClass(s.className); div.dataset.id=s.id;
+    div.innerHTML=`<div class="tile-top">${s.roll} - ${s.name}</div><div class="tile-bottom">${s.className}${s.sec? ' | ' + s.sec : ''}</div>`;
+    div.ondragstart=ev=>{ev.dataTransfer.setData('text/plain', s.id); ev.dataTransfer.effectAllowed='move';};
+    container.appendChild(div);
+  });
+}
+
+function renderActiveRoom(){
+  const room = state.rooms[state.activeRoom]; if(!room) return;
+  el('room-panel').style.display='flex'; el('room-name').value=room.name; el('rows-input').value=room.rows; el('cols-input').value=room.cols;
+  const placed = room.grid.filter(c=>c.studentId).length; el('room-info').textContent=`Total placed: ${placed} `;
+  const counts={}; room.grid.forEach(c=>{ if(c.studentId){ const st=state.students.find(s=>s.id===c.studentId); if(st) counts[st.className]=(counts[st.className]||0)+1; } });
+  const cc=el('class-counts'); cc.innerHTML=''; Object.keys(counts).forEach(cls=>{ const b=document.createElement('div'); b.className='badge'; b.style.background=colorForClass(cls); b.textContent=`${cls}: ${counts[cls]}`; cc.appendChild(b); });
+  const gridWrap=el('grid-container'); gridWrap.innerHTML=''; const grid=document.createElement('div'); grid.className='grid';
+  grid.style.gridTemplateColumns=`repeat(${room.cols},1fr)`; grid.style.gridAutoRows=`minmax(60px,auto)`;
+  room.grid.forEach((cell,idx)=>{
+    const cellEl=document.createElement('div'); cellEl.className='cell'; cellEl.dataset.index=idx;
+    cellEl.ondragover=ev=>ev.preventDefault();
+    cellEl.ondrop=ev=>{ ev.preventDefault(); const sid=ev.dataTransfer.getData('text/plain'); if(!sid) return; placeStudentInCell(state.activeRoom,idx,sid); };
+    
+    if(cell.studentId){
+  const st = state.students.find(s => s.id === cell.studentId);
+  if(st){
+    const p = document.createElement('div');
+    p.className = 'placed-tile';
+    p.draggable = true;
+    p.style.background = colorForClass(st.className);
+    // Show Roll, Name, Class and Section
+    p.innerHTML = `${st.roll} - ${st.name}<br><small>${st.className}${st.sec ? ' | ' + st.sec : ''}</small>`;
+    p.ondragstart = ev => { 
+      ev.dataTransfer.setData('text/plain', st.id); 
+      ev.dataTransfer.effectAllowed='move'; 
+    };
+    p.ondblclick = () => removeStudentFromCell(state.activeRoom, idx);
+    cellEl.appendChild(p);
+  }
+}
+
+    else cellEl.innerHTML='<div style="color:#899;font-size:12px">Empty</div>';
+    grid.appendChild(cellEl);
+  });
+  gridWrap.appendChild(grid);
+}
+
+function placeStudentInCell(roomIndex,cellIndex,studentId){
+  const room=state.rooms[roomIndex]; if(!room) return;
+  const cell=room.grid[cellIndex];
+  if(cell.studentId && cell.studentId===studentId) return;
+  if(cell.studentId) state.pool.push(cell.studentId);
+  state.rooms.forEach(r=>r.grid.forEach(c=>{if(c.studentId===studentId)c.studentId=null;}));
+  state.pool = state.pool.filter(id=>id!==studentId);
+  cell.studentId = studentId; renderAll();
+}
+function removeStudentFromCell(roomIndex,cellIndex){ const room=state.rooms[roomIndex]; if(!room) return; const cell=room.grid[cellIndex]; if(!cell.studentId) return; state.pool.push(cell.studentId); cell.studentId=null; renderAll(); }
+
+el('apply-dim').addEventListener('click',()=>{
+  const room = state.rooms[state.activeRoom]; if(!room) return;
+  const rows=parseInt(el('rows-input').value)||room.rows; const cols=parseInt(el('cols-input').value)||room.cols;
+  room.rows=rows; room.cols=cols; const oldGrid=room.grid; const newGrid=makeGrid(rows,cols);
+  for(let i=0;i<Math.min(oldGrid.length,newGrid.length);i++) newGrid[i]=oldGrid[i]; room.grid=newGrid; renderAll();
+});
+el('rename-room').addEventListener('click',()=>{ const room=state.rooms[state.activeRoom]; if(!room) return; room.name=el('room-name').value||room.name; renderRoomsTop(); });
+el('clear-room').addEventListener('click',()=>{ if(!confirm('Clear all students from this room?')) return; const room=state.rooms[state.activeRoom]; if(!room) return; room.grid.forEach(c=>{if(c.studentId) state.pool.push(c.studentId); c.studentId=null;}); renderAll(); });
+el('delete-room').addEventListener('click',()=>{ if(!confirm('Delete this room?')) return; state.rooms.splice(state.activeRoom,1); if(state.activeRoom>=state.rooms.length) state.activeRoom=state.rooms.length-1; renderAll(); });
+
+function renderAll(){ renderRoomsTop(); renderPool(); renderActiveRoom(); }
+
+initDefaultRoom(); renderAll();
+
+// Export
+el('export-png').addEventListener('click',()=>{html2canvas(el('layout-area')).then(canvas=>{const a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='seating.png';a.click();});});
+el('export-pdf').addEventListener('click',()=>{
+  html2canvas(el('layout-area')).then(canvas=>{
+    const imgData = canvas.toDataURL('image/png');
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p','pt','a4');
+    const w = pdf.internal.pageSize.getWidth();
+    const h = pdf.internal.pageSize.getHeight();
+    pdf.addImage(imgData,'PNG',0,0,w,h); pdf.save('seating.pdf');
+  });
+});
+el('export-doc').addEventListener('click',()=>{
+  let html = '<html><head><meta charset="utf-8"><title>Seating Plan</title></head><body>';
+  state.rooms.forEach(r=>{
+    html += `<h2>${r.name}</h2><table border="1" style="border-collapse:collapse"><tr>`;
+    for(let c=0;c<r.cols;c++) html+=`<th>Col ${c+1}</th>`; html+='</tr>';
+    for(let row=0;row<r.rows;row++){ html+='<tr>';
+      for(let col=0;col<r.cols;col++){ const idx=row*r.cols+col; const cell=r.grid[idx]; if(cell && cell.studentId){ const st=state.students.find(s=>s.id===cell.studentId); html+=`<td>${st.roll} - ${st.name} (${st.className})</td>`; } else html+='<td>Empty</td>'; } html+='</tr>';
+    }
+    html+='</table><br>';
+  });
+  html+='</body></html>';
+  const blob = new Blob([html],{type:'application/msword'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='seating.doc'; a.click();
+});
+</script>
+</body>
+</html>
